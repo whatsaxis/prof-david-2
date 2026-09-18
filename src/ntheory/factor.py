@@ -1,13 +1,13 @@
 import itertools
 
-from src.struct.number import Integer
+from src.struct.number import Natural
 
 
-def prime_factors(n: int | Integer):
+def prime_factors(n: int | Natural):
     """Finds all the prime factors of a positive integer n."""
 
     # TODO Maybe a decorator
-    if isinstance(n, Integer):
+    if isinstance(n, Natural):
         n = n.value
 
     i = 2
@@ -38,10 +38,10 @@ def prime_factors(n: int | Integer):
     return p_factors
 
 
-def factors(n: int | Integer):
+def factors(n: int | Natural):
     """Finds all the factors of a positive integer n."""
 
-    if isinstance(n, Integer):
+    if isinstance(n, Natural):
         n = n.value
 
     factors_l = []

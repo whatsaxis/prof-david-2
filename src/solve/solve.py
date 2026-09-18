@@ -1,46 +1,24 @@
-import math
-import itertools
-import collections
-
-from src.core.base import DavidBase
 from src.manipulate.basic import absorb
+from src.manipulate.evaluate import evaluate
 from src.manipulate.helpers import contains_var, descend_struct
 from src.manipulate.simplify import ExpandIdentities, simplify
-from src.ntheory.factor import factors
-from src.struct.number import Integer, Number, e, pi, ImaginaryUnit
+from src.solve.polynomial import find_var, get_poly_coefficients, is_poly, poly_solve
+from src.struct.number import ImaginaryUnit, Number, e, pi
 
-from src.struct.op import Log, Operator, internalize
+from src.struct.op import Log, Operator
 from src.struct.unknown import Unknown
 from src.struct.relation import Equals, Relation
 
 from src.struct.op import Add, Multiply, Power
 from src.struct.unknown import Wild
 
-from src.manipulate.pattern import Pattern
 from src.manipulate.substitute import Identity, IdentitySet, apply_greedily, apply_until_constant
 
 from src.manipulate.eq import eq_struct
 
 
-def find_var(op: DavidBase, var: Unknown, posn_offest=None):
-    """Returns the positions of a variable in a structure."""
-
-    if not posn_offest:
-        posn_offest = []
-
-    if not isinstance(op, Operator):
-        if eq_struct(op, var):
-            return [posn_offest]
-        return []
-
-    positions = []
-    for i, t in enumerate(op):
-        fv = find_var(t, var, posn_offest + [i])
-
-        if fv:
-            positions.extend(fv)
-
-    return positions
+p, q, r, s = Wild('p'), Wild('q'), Wild('r'), Wild('s')
+u, v = Wild('u', sequence=True), Wild('v', sequence=True)
 
 
 def attract(eq: Relation, var: Unknown):
@@ -50,6 +28,8 @@ def attract(eq: Relation, var: Unknown):
     """
 
     # step 1: move everything to the left
+    lhs = absorb(eq.left - eq.right)
+
     # step 2: try and bring stuff closer together with rewrite rules
 
     pass
@@ -80,10 +60,10 @@ def collect(eq: Operator | Unknown | Number, var: Unknown):
 
     collect_rules = IdentitySet(
         Identity((var + p) * (var - p), var**2 - p**2),
-        Identity(u**2 + 2*u*v + v**2, (u + v)**2, {u: lambda t: eq_struct(var, t) or var in t.freq_table}),
+        Identity(u**2 + 2*u*v + v**2, (u + v)**2, {u: lambda t: eq_struct(var, t) or (isinstance(t, Operator) and var in t.freq_table)}),
 
-        Identity((u - v)*(u**2 + u*v + v**2), u**3 - v**3),
-        Identity((u + v) * (u ** 2 - u*v + v ** 2), u ** 3 + v ** 3),
+        Identity((u - v)*(u**2 + u*v + v**2), u**3 - v**3, {u: lambda t: eq_struct(var, t) or (isinstance(t, Operator) and var in t.freq_table)}),
+        Identity((u + v) * (u ** 2 - u*v + v ** 2), u ** 3 + v ** 3, {u: lambda t: eq_struct(var, t) or (isinstance(t, Operator) and var in t.freq_table)}),
 
         Identity(u * var + v * var, (u + v) * var),
         Identity(var + var, 2 * var),
@@ -92,7 +72,11 @@ def collect(eq: Operator | Unknown | Number, var: Unknown):
     )
 
     applied = apply_greedily(lhs, collect_rules, occ_metric)
-    return applied[0], abs(applied[1])
+
+    collected = simplify(applied[0])
+    instances = len(find_var(collected, var))
+
+    return collected, instances
 
 
 def solve_isolated(rel: Relation, side: str, var_pos: tuple):
@@ -127,17 +111,19 @@ def solve_isolated(rel: Relation, side: str, var_pos: tuple):
                 # If term is base
                 if p == 0:
                     # Take root
-                    # TODO Complex roots
 
                     rel_cpy.pow(1 / ref[1])
 
-                    if isinstance(ref[1], Number) and isinstance(ref[1].value, int) and ref[1].value > 0:
-                        for k in range(1, ref[1].value + 1):
-                            sols_next.append(Equals(rel.left, e**(pi * ImaginaryUnit() * k / ref[1]) * rel.right))
+                    # TODO Complex roots
+                    # if isinstance(ref[1], Number) and isinstance(ref[1].value, int) and ref[1].value > 0:
+                    #     for k in range(1, ref[1].value + 1):
+                    #         sols_next.append(Equals(rel.left, e**(pi * ImaginaryUnit() * k / ref[1]) * rel.right))
 
                 # If term is exponent
                 elif p == 1:
                     rel_cpy.log(ref[0])
+            elif isinstance(ref, Log):
+                rel_cpy.log_pow(ref.base)
 
             sols_next.append(rel_cpy)
 
@@ -147,177 +133,9 @@ def solve_isolated(rel: Relation, side: str, var_pos: tuple):
     # TODO check for domain of functions
 
     return tuple(
-        simplify(s.right).eval()
+        evaluate(simplify(s.right))
         for s in sols
     )
-
-
-p, q, r, s = Wild('p'), Wild('q'), Wild('r'), Wild('s')
-u, v = Wild('u', sequence=True), Wild('v', sequence=True)
-
-
-def poly_collect(poly: Add, var: Unknown):
-    """
-    Collects the coefficients of terms of the variable and transforms all terms into powers of the variable.
-    """
-
-    collect_powers = IdentitySet(
-        Identity(var * var, var**2),
-        Identity(var ** p * var, var ** (p + 1)),
-        Identity(var ** p * var ** q, var ** (p + q))
-    )
-
-    i_set = IdentitySet(
-        Identity(
-            p * u + p * v, p * (u + v),
-
-            # Of the form ax or ax**n
-            {p: lambda m: eq_struct(m, var) or eq_struct(m, var**s)}
-        )
-    )
-
-    return apply_until_constant(apply_until_constant(poly, collect_powers), i_set)
-
-
-def get_coefficients(expr: Add, var: Unknown):
-    poly = poly_collect(expr, var)
-
-    terms = [pt for pt in itertools.chain(
-        Pattern(u * var**p).match(poly),
-        Pattern(var**p).match(poly),
-        Pattern(u * var).match(poly),
-        Pattern(var).match(poly)
-    )]
-
-    poly_term_indices = set(
-        pt[1][0]
-        for pt in terms
-
-        # Only top-level matches
-        if len(pt[1]) == 1
-    )
-
-    degree = 0
-    non_var = []
-
-    for i, t in enumerate(poly):
-        if i not in poly_term_indices:
-            non_var.append(t)
-
-    coefficients = {0: absorb(Add(*non_var))}
-
-    for t in terms:
-        # Only top-level matches
-        if len(t[1]) > 1:
-            continue
-
-        coef, exp = t[0].get('u', internalize(1)), t[0].get('p', internalize(1))
-
-        # TODO Non-numeric powers and coefficients?
-
-        if exp.value > degree:
-            degree = exp.value
-
-        coefficients[exp.value] = coef
-
-    return degree, coefficients
-
-
-def poly_solve_coeffs(degree: int, coeffs: dict):
-    """Solves a polynomial given coefficients."""
-
-    if degree == 1:
-        a, b = coeffs.get(1), coeffs.get(0, internalize(0))
-
-        return -b / a,
-
-    if degree == 2:
-
-        a, b, c = coeffs.get(2), coeffs.get(1, internalize(0)), coeffs.get(0, internalize(0))
-
-        delta = b**2 - 4*a*c
-        return (-b + delta**Power(2, -1)) / 2, (-b - delta**Power(2, -1)) / (2*a)
-
-    # if degree == 3:
-    #     a, b, c, d = coeffs.get(3), coeffs.get(2, internalize(0)), coeffs.get(1, internalize(0)), coeffs.get(0, internalize(0))
-    #
-    #     delta_0 = b**2 - 3*a*c
-    #     delta_1 = 2*b**3 - 9*a*b*c + 27*a**2*d
-    #
-    #     C1 = delta_1 +
-
-
-def poly_eliminate_negative_powers(poly: Add, var: Unknown):
-    """Multiplies out negative powers, increasing the degree of the polynomial by the smallest negative degree."""
-
-    degree, coeffs = get_coefficients(poly, var)
-
-    # Deal with negative powers
-    # TODO Non-numeric powers?
-    if any(p < 0 for p in coeffs.keys()):
-        min_neg_pow = min(coeffs.keys())
-
-        poly_2 = []
-        for pt in poly:
-            poly_2.append(pt * var**abs(min_neg_pow))
-
-        return simplify(poly.duplicate(*poly_2))
-
-    return poly
-
-
-def poly_solve(poly: Add, var: Unknown):
-    """
-    | Solves a polynomial equation of the form a_1 x^b_1 + a_2 x^b_2 + ... + a_n = 0.
-    | Note that the polynomial is assumed to be on the left.
-    | Also assumed that poly_eliminate_negative_powers() has been called on the polynomial already.
-    """
-
-    degree, coeffs = get_coefficients(poly, var)
-
-    # Check for multiples in the coefficients
-
-    # TODO Non-numeric coefficients and powers
-
-    zero_root_flag = False
-    # TODO zero root flag
-
-    # Factor out the maximum variable power
-
-    if eq_struct(coeffs.get(0, internalize(0)), internalize(0)):
-        p_min = min(coeffs.keys(), key=lambda p: not eq_struct(coeffs[p], internalize(0)))
-
-        coeffs = {
-            pwr: coef - p_min
-            for pwr, coef in coeffs.keys()
-        }
-
-        zero_root_flag = True
-        degree -= p_min
-
-    # Make a substitution for y = x^g, for g = gcd(a1, a2, ..., a_[n-1]) [if g > 1]
-
-    c_gcd = math.gcd(*coeffs.keys())
-
-    if c_gcd > 1:
-        coeffs = {
-            pwr // c_gcd: coef
-            for pwr, coef in coeffs.items()
-        }
-
-        degree //= c_gcd
-
-        sols = []
-        for sol in poly_solve_coeffs(degree, coeffs):
-            sols.append(
-                solve(Equals(var**c_gcd, sol), var).right
-            )
-
-        return sols
-
-    # Otherwise solve normally
-
-    return poly_solve_coeffs(degree, coeffs)
 
 
 def get_term_type(expr: Operator | Unknown | Number, var: Unknown):
@@ -334,18 +152,6 @@ def get_term_type(expr: Operator | Unknown | Number, var: Unknown):
     #
     # for pos in find_var(expr, var):
     #     if isinstance(descend_struct(expr, pos[:-1]))
-
-
-def is_poly(expr: Operator, var: Unknown):
-    """Checks whether an expression is a polynomial."""
-
-    for pos in find_var(expr, var):
-        if len(pos) == 2 or (len(pos) == 3 and pos[-1] == 0 and isinstance(descend_struct(expr, pos[:-1] + [1]), Integer)):
-            continue
-        else:
-            return False
-
-    return True
 
 
 def largest_sub_struct_containing_var(expr: Operator, var: Unknown):
@@ -377,19 +183,20 @@ def homogenize(expr: Add, var: Unknown, *, sub_idx=0):
     expr = expr.copy()
 
     if not isinstance(expr, Add):
-        return expr
+        return None, expr
 
-    ExpSplitIdentities = IdentitySet(
+    SplitIdentities = IdentitySet(
+        # Power splitting
         Identity(p ** (q + u), p ** q * p ** u),
-        Identity(p ** (q * u), (p ** q) ** u, {q: lambda t: contains_var(t, var)})
+        Identity(p ** (q * u), (p ** q) ** u,
+                 {q: lambda t: contains_var(t, var), u: lambda t: not contains_var(t, var)}),
+
+        # Log splitting
+        Identity(Log(p, q * u), Log(p, q) + Log(p, u)),
+        Identity(Log(p, q ** r), r * Log(p, q))
     )
 
-    LogSplitIdentities = IdentitySet(
-        Identity(Log(p, q*u), Log(p, q) + Log(p, u)),
-        Identity(Log(p, q**r), r * Log(p, q))
-    )
-
-    split = apply_until_constant(apply_until_constant(expr, ExpSplitIdentities, do_eval=False), LogSplitIdentities, do_eval=False)
+    split = apply_until_constant(expr, SplitIdentities, do_eval=False)
     # print('split', split)
 
     sub = None
@@ -404,7 +211,7 @@ def homogenize(expr: Add, var: Unknown, *, sub_idx=0):
         # print('term', term)
         # print('pos', local_sub_pos)
         # print('sub', sub, sub_possibility)
-        # print('descended', descend_struct(split, [i] + local_sub_pos[:-1])[local_sub_pos[-1]])
+        # print('descended', descend_struct(split, (i,) + local_sub_pos[:-1])[local_sub_pos[-1]])
 
         if sub is None:
             sub = sub_possibility
@@ -412,12 +219,11 @@ def homogenize(expr: Add, var: Unknown, *, sub_idx=0):
             if not eq_struct(sub, sub_possibility):
                 return None, None
 
-        # TODO Somehow create new sub variable letters
-        uk = Unknown(f's_{ sub_idx }')
+        uk = Unknown(f's', str(sub_idx))
 
         # Within the term
         if local_sub_pos:
-            descend_struct(split, [i] + local_sub_pos[:-1])[local_sub_pos[-1]] = uk
+            descend_struct(split, (i,) + local_sub_pos[:-1])[local_sub_pos[-1]] = uk
         # The term itself
         else:
             split[i] = uk
@@ -434,11 +240,15 @@ def homogenize(expr: Add, var: Unknown, *, sub_idx=0):
     # TODO
 
 
-def solve(rel: Relation, var: Unknown, *, sub_idx=0):
+def solve(rel: Relation, var: Unknown, *, sub_idx=0, verbose=False):
     """Solves for a variable."""
 
-    print('►►► Equation solver')
-    print('      for ', rel)
+    def vprint(*s):
+        if verbose:
+            print(*s)
+
+    vprint('►►► Equation solver')
+    vprint('      for ', rel)
 
     rel_cpy = rel.copy()
 
@@ -447,10 +257,10 @@ def solve(rel: Relation, var: Unknown, *, sub_idx=0):
 
     isolated = len(var_positions_l + var_positions_r) == 1
 
-    print('    → Checking for isolated equation')
+    vprint('    → Checking for isolated equation')
     if isolated:
-        print(f'        → Solving isolated equation for { var }:')
-        print('              ', rel_cpy)
+        vprint(f'        → Solving isolated equation for { var }:')
+        vprint('              ', rel_cpy)
 
         if var_positions_l:
             side = 'left'
@@ -462,81 +272,87 @@ def solve(rel: Relation, var: Unknown, *, sub_idx=0):
         return solve_isolated(rel_cpy, side, var_pos)
 
     else:
-        print(f'    → Solving non-isolated equation ({ len(var_positions_l + var_positions_r) } variable instances)')
+        vprint(f'    → Solving non-isolated equation ({ len(var_positions_l + var_positions_r) } variable instances)')
 
         # [Movement] Move all terms to the left side
 
         rel_cpy.add(-rel_cpy.right)
-        print('        → Moved all terms to left side')
+        vprint('        → Moved all terms to left side')
 
         # [Simplification] The solver simplifies the expression with select rewrite rules.
         rel_cpy = Equals(simplify(rel_cpy.left), 0)
 
-        print('        → Performed simplification')
-        print('              ', rel_cpy)
+        vprint('        → Performed simplification')
+        vprint('              ', rel_cpy)
 
         # [Collection] The solver attempts to reduce the number of the desired unknown by applying a set of patterns.
         lhs, num_vars = collect(rel_cpy.left, var)
         rel_cpy = Equals(lhs, rel_cpy.right)
 
-        print(f'        → Performed collection ({ num_vars } remaining variable instances)')
-        print('              ', rel_cpy)
+        vprint(f'        → Performed collection ({ num_vars } remaining variable instances)')
+        vprint('              ', rel_cpy)
 
         if num_vars == 1:
             return solve(rel_cpy, var)
 
         # [PolySolve] Solver attempts to solve as a polynomial.
 
-        print('        → Invoking PolySolve')
+        vprint('        → Invoking PolySolve')
 
         if is_poly(rel_cpy.left, var):
-            print(f'        → Expression is a polynomial!')
-            print(f'        → Eliminating negative powers')
-            rel_cpy = Equals(
-                simplify(poly_eliminate_negative_powers(rel_cpy.left, var)),
-                rel_cpy.right
-            )
+            vprint(f'        → Expression is a polynomial!')
 
-            print(f'        → Solving { rel_cpy } with PolySolve')
-            sols = poly_solve(rel_cpy.left, var)
+            # todo jesus christ
+            # rel_cpy = Equals(
+            #     simplify(poly_eliminate_negative_powers(evaluate(rel_cpy.left, force=True), var)),
+            #     rel_cpy.right
+            # )
+
+            degree, coeffs = get_poly_coefficients(evaluate(rel_cpy.left, force=True), var)
+
+            vprint(f'        → Solving { rel_cpy } with PolySolve')
+            sols = tuple(simplify(s) for s in poly_solve(degree, coeffs, var, verbose=verbose))
 
             if sols:
                 return sols
             else:
-                print('        → Expression is not solvable (yet... degree > 3)')
+                vprint('        → Expression is not solvable (yet... degree > 3)')
         else:
-            print('        → Expression is not a polynomial')
+            vprint('        → Expression is not a polynomial')
 
         # [Homogenization] Solver attempts to make a substitution in the variable to transform the equation into a polynomial.
 
-        print(f'        → Attempting homogenization')
+        vprint(f'        → Attempting homogenization')
         sub, homo = homogenize(rel_cpy.left, var, sub_idx=sub_idx)
 
         if sub is not None and homo is not None:
-            print(f'        → Substitution found!')
-            print('              ', sub[0], '=', sub[1], '  in')
-            print('              ', homo)
+            vprint(f'        → Substitution found!')
+            vprint('              ', sub[0], '=', sub[1], '  in')
+            vprint('              ', homo)
 
             sols = solve(Equals(homo, 0), sub[0], sub_idx=sub_idx + 1)
 
             if sols is None:
-                print(f'[↑]     → No solutions found.')
+                vprint(f'[↑]     → No solutions found.')
                 return None
 
-            print(f'[↑]     → Solutions found after substitution!')
+            vprint(f'[↑]     → Solutions found after substitution!')
 
             for sol in sols:
-                print('              ', sub[0], '=', sol.eval(force=True))
+                vprint('              ', sub[0], '=', evaluate(sol))
 
             # Todo check if there are actually solutions returned
 
-            print(f'        → Solving above equations for ', sub[0], '=', sub[1])
-            return tuple(
-                solve(Equals(sub[1], sol.eval(force=True)), var, sub_idx=sub_idx + 1)
-                for sol in sols
-            )
+            vprint(f'        → Solving above equations for ', sub[0], '=', sub[1])
+
+            all_sols = tuple()
+            for sol in sols:
+                # Solve equation for substitution for each solution of original eqn to get back variable
+                all_sols += solve(Equals(sub[1], evaluate(sol)), var, sub_idx=sub_idx + 1)
+
+            return all_sols
         else:
-            print(f'        → No suitable substitution found.')
+            vprint(f'        → No suitable substitution found.')
 
         # [Attraction] The solver tries to bring terms closer by applying rewrite rules according to a distance metric.
         pass

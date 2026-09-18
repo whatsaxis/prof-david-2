@@ -6,7 +6,7 @@ from src.struct.unknown import Wild
 
 from src.manipulate.basic import absorb
 from src.manipulate.pattern import Pattern
-from src.manipulate.substitute import substitute
+from src.manipulate.substitute import sub_into_pattern
 
 
 class Relation(DavidBase):
@@ -39,8 +39,8 @@ class Relation(DavidBase):
     def apply(self, p: Pattern):
         """Applies to both sides of a relation."""
 
-        self.left = absorb(substitute(p, {Relation.REL_WILD_SYMBOL: self.left}))
-        self.right = absorb(substitute(p, {Relation.REL_WILD_SYMBOL: self.right}))
+        self.left = absorb(sub_into_pattern(p, {Relation.REL_WILD_SYMBOL: self.left}))
+        self.right = absorb(sub_into_pattern(p, {Relation.REL_WILD_SYMBOL: self.right}))
 
         return self
 
@@ -91,6 +91,10 @@ class Equals(Relation):
     def log(self, base):
         LOG_PATTERN = Pattern(Log(base, Relation.w))
         return self.apply(LOG_PATTERN)
+
+    def log_pow(self, base):
+        LOG_POW_PATTERN = Pattern(base**Relation.w)
+        return self.apply(LOG_POW_PATTERN)
 
 
 # TODO Implement add, mul, div, pow, log for all relations

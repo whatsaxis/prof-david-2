@@ -5,14 +5,11 @@ import collections
 from src.manipulate.basic import absorb
 from src.manipulate.helpers import descend_struct, from_freq
 from src.struct.op import Operator, internalize
-from src.manipulate.eq import eq_struct
+from src.manipulate.eq import eq_struct, eq_type
 from src.struct.number import Number
 from src.struct.unknown import Unknown, Wild
 
 from src.core.assume import Commutative
-
-
-# TODO Probably extract to Operator
 
 
 def interrogate(*facts: dict, wilds):
@@ -24,7 +21,6 @@ def interrogate(*facts: dict, wilds):
         fact = None
 
         for f in facts:
-            # TODO HMMMM
             if f.get(w, None) is None:
                 continue
 
@@ -45,6 +41,8 @@ class Pattern:
         self.pattern = internalize(pattern)
 
         self.wild_positions = Pattern.traverse(pattern)
+
+        # These are specific criteria (anonymous functions, usually) that must be met by a wild for it to be a valid match; for example, to be non-zero
         self.wild_conditions = wild_conditions
 
     def match(self, test: Operator):
@@ -62,9 +60,10 @@ class Pattern:
 
         # TODO This condition may not be right. It has caused issues already [wild against operator].
         if isinstance(pattern, Wild):
+            # Prepare matches output
             matches = {
-                k: (None if k != pattern.symbol else test)
-                for k in self.wild_positions.keys()
+                w: (None if w != pattern.symbol else test)
+                for w in self.wild_positions.keys()
             }
 
             # TODO Is it just worth straight up removingitg this eq_struct call? It's double the work since we're already doing a backtracking thing anyway.
@@ -78,12 +77,26 @@ class Pattern:
                         for k in self.wild_positions.keys()
                     }
 
-        # TODO Is length condition necessary?
-        elif isinstance(pattern, Operator) and type(pattern) == type(test):
-            if pattern.ask(Commutative):
-                yield from self.match_commutative(test, pattern, posn_offset=posn_offset, parent=parent)
-            else:
-                yield from self.match_non_commutative(test, pattern, posn_offset=posn_offset, parent=parent)
+            # Quick exit, so that the sequence wild isn't matched on nested terms
+            # TODO Let's pray this doesn't cause any problems!
+            if pattern.sequence:
+                return
+
+        elif isinstance(pattern, Operator):
+            # This nesting is on purpose for efficiency with elif
+            if eq_type(pattern, test):
+                if pattern.ask(Commutative):
+                    yield from self.match_commutative(test, pattern, posn_offset=posn_offset, parent=parent)
+                else:
+                    yield from self.match_non_commutative(test, pattern, posn_offset=posn_offset, parent=parent)
+
+        # Not a wild, not an operator. So either an unknown or a number
+        else:
+            if eq_struct(test, pattern, wild_conditions=self.wild_conditions):
+                if parent:
+                    yield {}, posn_offset, None
+                else:
+                    yield {}
 
         # Match nested terms
         if parent is True:
@@ -135,31 +148,33 @@ class Pattern:
 
                 # Absorb terms of the compiled fact for sequence variables within the same structure
                 #   e.g. matching pattern 《u》 - 《u》 to Add[Multiply[3, x], Multiply[-1, 3, x]]
-                #   results in 《u》 = Multiply[3, x], but we can't directly match that into Multiply[-1, 3, x] w/o absorbing
-                if pat_term.sequence and isinstance(compiled_fact[pat_term], Operator) and type(compiled_fact[pat_term]) == type(test):
+                #   results in 《u》 = Multiply[3, x], but we can't directly match that into Multiply[-1, 3, x], so we go term by term
+                if pat_term.sequence and isinstance(compiled_fact[pat_term], Operator) and eq_type(compiled_fact[pat_term], test):
                     for sub_term in compiled_fact[pat_term]:
-                        if freq[sub_term] == 0:
+                        if ft_copy[sub_term] == 0:
                             return
 
                         ft_copy[sub_term] -= 1
 
                 # Otherwise treat them and other wilds as normal wilds
                 else:
-                    if freq[compiled_fact[pat_term]] == 0:
+                    if ft_copy[compiled_fact[pat_term]] == 0:
                         return
 
                     ft_copy[compiled_fact[pat_term]] -= 1
 
                 # The compiled table will not change after this step
                 yield from recurse(ft_copy, pat[1:], compiled_fact)
+                return  # Oops, was doing all the below despite the optimization!
 
             # TODO For non-parent matching, sequence variables MUST somehow cover all the terms of the structure.
 
             # if parent: print(dict(freq), pat_term)
 
-            sequence, possible_terms_seq, ranges_seq = False, [], []
+            sequence = False
             if isinstance(pat_term, Wild) and pat_term.sequence:
                 sequence = True
+                possible_terms_seq, ranges_seq = [], []
 
             for t in freq:
                 # Test if there are any remaining terms of that type
@@ -171,7 +186,9 @@ class Pattern:
                     # if parent: print('    -> exited here because', t, pat_term, 'not equal')
                     continue
 
+                # [BRANCH 1] SEQUENCE WILD MATCHING
                 # Check which terms can match with the sequence variable
+                # This then jumps once all terms are done and is handled below
                 if sequence:
 
                     if eq_struct(t, pat_term, wild_conditions=self.wild_conditions):
@@ -180,9 +197,12 @@ class Pattern:
 
                     continue
 
+                # [BRANCH 2] NORMAL WILD MATCHING
+                # Otherwise, normal (non-sequence) wildcard to be matched
+
                 # Test if there is a contradiction within this branch
                 # posn_offset isn't passed as it is not used.
-                term_facts = [
+                term_matches = [
                     p
                     for p in self._match(
                         t,
@@ -198,7 +218,7 @@ class Pattern:
 
                 # If the term has wilds but none were recorded, that means there is a contradiction. Hence, the whole match is invalid.
                 # If wilds were recorded, contradictions will be detected in the interrogate() call below.
-                if (isinstance(pat_term, Operator) and pat_term.has_wilds and not term_facts) or (isinstance(pat_term, Wild) and not term_facts):
+                if (isinstance(pat_term, Operator) and pat_term.has_wilds and not term_matches) or (isinstance(pat_term, Wild) and not term_matches):
                     # print('[1]', pat[0], t)
                     continue
 
@@ -216,7 +236,7 @@ class Pattern:
 
                     # print('[3]', pat[0], t)
 
-                    for tf in term_facts:
+                    for tf in term_matches:
                         # print('interpretation', tf, compiled_fact)
                         compiled = interrogate(compiled_fact, tf, wilds=self.wild_positions.keys())
 
@@ -232,9 +252,7 @@ class Pattern:
                 # print('    term facts for', test, ':', term_facts, dict(compiled_fact))
 
             if sequence:
-                # [Optimization 2] If there is only 1 sequence variable (which usually is... why would you need more), just return the rest of the terms.
-
-                # print('k', dict(compiled_fact), test, pattern, pattern.num_sequence)
+                # [Optimization 2] If there is only 1 sequence variable (which usually is... why would you need more in 1 pattern term), just return the rest of the terms.
 
                 if pattern.num_sequence == 1:
                     # Oops! Not all terms can match; exit
@@ -243,10 +261,18 @@ class Pattern:
 
                     # print('aasdsad', compiled_fact, {pat_term.symbol: absorb(pattern.duplicate(*from_freq(freq)))})
                     # print('asdasd', interrogate(compiled_fact, {pat_term: absorb(pattern.duplicate(*from_freq(freq)))}, wilds=self.wild_positions.keys()))
-                    seq_yield = interrogate(compiled_fact, {pat_term: absorb(pattern.duplicate(*from_freq(freq)))}, wilds=self.wild_positions.keys())
+                    seq_yield = interrogate(
+                        compiled_fact,
+                        {
+                            pat_term: absorb(
+                                pattern.duplicate(*from_freq(freq))
+                            )
+                        },
+                        wilds=self.wild_positions.keys()
+                    )
 
                     if parent:
-                        yield seq_yield, posn_offset
+                        yield seq_yield, posn_offset, freq
                     else:
                         yield seq_yield
 
@@ -286,7 +312,7 @@ class Pattern:
 
                 # Recursively call match() on sub-terms for the same pattern, since commutativity may vary
                 # posn_offset isn't passed as it is not used.
-                sub_term_matches = [
+                wild_sub_term_matches = [
                     p
 
                     for p in self._match(
@@ -295,18 +321,27 @@ class Pattern:
 
                         parent=False
                     )
+
+                    # Don't add non-wild sub term matches
+                    if p != {}
                 ]
 
                 # If the term has wilds but none were recorded, that means there is a contradiction. Hence, the whole match is invalid.
                 # If wilds were recorded, contradictions will be detected in the interrogate() call below.
-                if (isinstance(pat_term, Operator) and pat_term.has_wilds and not sub_term_matches) or (isinstance(pat_term, Wild) and not sub_term_matches):
+                if (isinstance(pat_term, Operator) and pat_term.has_wilds and not wild_sub_term_matches) or (isinstance(pat_term, Wild) and not wild_sub_term_matches):
                     continue
 
-                if sub_term_matches:
-                    stm_all.append(sub_term_matches)
+                if wild_sub_term_matches:
+                    stm_all.append(wild_sub_term_matches)
 
             if not ok:
                 continue
+
+            # If sub term matches are empty, but it still passed the equality checks, that means the pattern
+            # has no wilds. Hence, just return the position offset.
+            if not stm_all:
+                yield {}, posn_offset, (i, i + len(pattern))
+                return
 
             # There may be multiple possible matches from sub-terms; nothing a Cartesian product can't handle
             for possible in itertools.product(*stm_all):
@@ -316,6 +351,8 @@ class Pattern:
                     continue
 
                 if parent:
+                    # Not i + len(pattern) - 1, which would be the inclusive
+                    # span, since arr[i:j] indexes up to the (j-1)th element
                     yield dict(it), posn_offset, (i, i + len(pattern))
                 else:
                     yield dict(it)

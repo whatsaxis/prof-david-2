@@ -51,6 +51,8 @@ class AssumptionSet:
         """Set the value of an assumption."""
 
         self.assumptions[asm] = value
+
+        # TODO I disabled this because it's horribly slow. It does work!
         # self.update()
 
     def _set_simple(self, expr: str | tuple, value: bool):
@@ -166,6 +168,7 @@ NumberAssumptions = AssumptionSet(
     Irrational > ~Integer,
 
     # Positive and negative
+    # TODO I don't like assumptions for + and - numbers
     ~Negative <= Positive,
 
     Negative > NonPositive,

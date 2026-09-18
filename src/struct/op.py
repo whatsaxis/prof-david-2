@@ -9,7 +9,7 @@ from src.core.assume import OperatorAssumptions, Commutative, Associative
 from src.core.io import OperatorIO
 # from src.manipulate.eq import eq_type
 
-from src.struct.number import Constant, ImaginaryUnit, Number, Real, Integer, Rational
+from src.struct.number import Constant, ImaginaryUnit, Number, Real, Natural, minus_one, pi
 
 from typing import Optional, Callable
 
@@ -17,17 +17,20 @@ from typing import Optional, Callable
 # TODO [https://stackoverflow.com/questions/34330284/what-is-the-risk-of-collisions-when-relying-on-python-hash-function]
 
 
-def internalize(obj, *, convert_negatives=True):
+def internalize(obj):
     """Function to convert primitives to internal objects."""
 
     # TODO library-wide preparation function
 
     if isinstance(obj, int):
-        if convert_negatives and obj < 0 and obj != -1:
-            # TODO i hate this
-            return Multiply(Integer(abs(obj)), Integer(-1))
+        if obj == -1:
+            return minus_one
 
-        return Integer(obj)
+        if obj < 0 and obj != -1:
+            return Multiply(Natural(abs(obj)), internalize(-1))
+
+        return Natural(obj)
+
     if isinstance(obj, float):
         import warnings
         warnings.warn('Real instantiated!', FutureWarning)
@@ -52,9 +55,9 @@ class Operator(DavidBase, OperatorIO):
         # TODO Make frequency tables ONLY for commutative
         # TODO Make frequency tables only generate when needed (maybe? defeats the point?)
 
+        # Absorb terms of associative operators
         for t in terms:
-            # TODO This is ugly
-            if type(t) == type(self) and self.ask(Associative):
+            if type(t) is type(self) and self.ask(Associative):
                 at = absorb(t)
 
                 if isinstance(at, Operator):
@@ -92,14 +95,16 @@ class Operator(DavidBase, OperatorIO):
         self.__dict__.pop('num_sequence', None)
         self.__dict__.pop('has_unknowns', None)
 
-    def _regenerate_freq(self):
+    def _regenerate_freq(self, recurse=False):
         """Regenerates the frequency table."""
 
-        # TODO thank f*ck O(2n) = O(n)
         self.freq_table = defaultdict(lambda: 0)
 
         for t in self.terms:
             self.freq_table[t] += 1
+
+            if recurse and isinstance(t, Operator):
+                t._regenerate_freq(recurse=True)
 
     """Properties"""
 
@@ -233,92 +238,18 @@ class Operator(DavidBase, OperatorIO):
 
         return c
 
-    def eval(self, force=False):
-        """Evaluates constant terms for a given operator."""
-
-        if isinstance(self, Power):
-            be, pe = [t.eval(force=force) for t in self]
-
-            if not (isinstance(be, Number) and isinstance(pe, Number) and not isinstance(be, ImaginaryUnit) and not isinstance(pe, ImaginaryUnit)):
-                return self.duplicate(be, pe)
-
-            if pe.value >= 0 or force:
-                return internalize(self.eval_fn(be.value, pe.value))
-
-            return self.duplicate(be, pe)
-
-        if isinstance(self, Log):
-            base, arg = [t.eval(force=force) for t in self]
-
-            if not (isinstance(base, Number) and isinstance(arg, Number)):
-                return self.duplicate(base, arg)
-
-            value = internalize(self.eval_fn(base.value, arg.value))
-
-            # TODO We need a better way to differentiate between integers, reals, etc..
-            if isinstance(value.value, int) or force:
-                return value
-
-            return self.duplicate(base, arg)
-
-        # TODO fix this dumb piece of sh*t and move it out of the operator class
-
-        const = []
-        non_const = []
-
-        all_number = True
-
-        for t in self:
-            if isinstance(t, Operator) and not isinstance(t, Power):
-                term_eval = t.eval(force=force)
-
-                if not isinstance(term_eval, Number):
-                    all_number = False
-
-                    non_const.append(term_eval)
-                else:
-                    const.append(term_eval)
-            elif isinstance(t, Power):
-                term_eval = t.eval(force=force)
-
-                if isinstance(term_eval, Number) and (force or isinstance(term_eval.value, int)):
-                    const.append(term_eval)
-                else:
-                    all_number = False
-                    non_const.append(term_eval)
-            elif isinstance(t, Number) and not isinstance(t, ImaginaryUnit):
-                if isinstance(t, Constant) and not force:
-                    continue
-
-                const.append(t)
-            else:
-                all_number = False
-
-                non_const.append(t.eval(force=force))
-
-        constant_term = internalize(self.eval_fn(*(t.value for t in const)), convert_negatives=not force)
-        # print(self, constant_term, self.eval_fn(*(t.value for t in const)))
-
-        if all_number:
-            return constant_term
-        else:
-            if const:
-                return self.duplicate(constant_term, *non_const)
-
-            return self.duplicate(*non_const)
-
-    def order_fast(self):
-        """Generates a cheap ordered representation (hash-based)."""
-
-        # TODO I don't know how to make this otherwise. I just need it to be CONSISTENT.
-        # TODO Biggest problem with powers whose exponent is symbolic. Things like (a + b + c)^n. How do you even order that?
-
-        return self.duplicate(
-            *sorted(
-                (term for term in self.terms),
-                key=lambda t: hash(t)
-            )
-        )
+    # def order_fast(self):
+    #     """Generates a cheap ordered representation (hash-based)."""
+    #
+    #     # TODO I don't know how to make this otherwise. I just need it to be CONSISTENT.
+    #     # TODO Biggest problem with powers whose exponent is symbolic. Things like (a + b + c)^n. How do you even order that?
+    #
+    #     return self.duplicate(
+    #         *sorted(
+    #             (term for term in self.terms),
+    #             key=lambda t: hash(t)
+    #         )
+    #     )
 
 
 class Add(Operator, OperatorIO):
@@ -366,6 +297,14 @@ class Power(Operator):
             unary=False
         )
 
+    @property
+    def base(self):
+        return self.terms[0]
+
+    @property
+    def exp(self):
+        return self.terms[1]
+
 
 # TODO Log
 class Log(Operator):
@@ -392,6 +331,63 @@ class Log(Operator):
 
     def __str__(self):
         return f'Log❲{ self.base }❳[{ self.arg }]'
+
+
+class Trig(Operator):
+
+    def __init__(self, eval_fn, x):
+        super().__init__(
+            eval_fn,
+            None,
+            x,
+
+            commutative=False,
+            associative=False,
+            unary=True
+        )
+
+    @property
+    def inside(self):
+        return self.terms[0]
+
+
+class Sin(Trig):
+
+    def __init__(self, x, *, freq=None):
+        super().__init__(math.sin, x)
+
+    def __str__(self):
+        return f'sin[{ self.inside }]'
+
+
+class Cos(Trig):
+    # I was originally going to represent everything in terms of sin [e.g. cos x = sin(π/2 - x)]
+    # Then I decided that waws a horrible idea because it's hell to pattern match identities and way less human!
+    # To my disgust, I now need a redundant Cos operator that is not semantically different from the rest in the way that + is from *.
+    # Oh, well!
+
+    def __init__(self, x, *, freq=None):
+        super().__init__(math.cos, x)
+
+    def __str__(self):
+        return f'cos[{ self.inside }]'
+
+
+
+def Tan(x):
+    return Sin(x) / Cos(x)
+
+
+def Sec(x):
+    return 1 / Cos(x)
+
+
+def Csc(x):
+    return 1 / Sin(x)
+
+
+def Cot(x):
+    return Cos(x) / Sin(x)
 
 
 class Container(Operator):

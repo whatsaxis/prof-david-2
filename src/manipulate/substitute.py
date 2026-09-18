@@ -1,5 +1,7 @@
 from typing import Callable
 
+from src.manipulate.eq import eq_struct
+from src.manipulate.evaluate import evaluate
 from src.struct.op import Operator, internalize
 
 from src.manipulate.basic import DavidObject, absorb
@@ -28,7 +30,7 @@ class IdentitySet:
         return iter(self.identities)
 
 
-def substitute(pattern: Pattern, values: dict):
+def sub_into_pattern(pattern: Pattern, values: dict):
     """Substitution function into the pattern."""
 
     if not isinstance(pattern.pattern, Operator):
@@ -56,10 +58,60 @@ def substitute(pattern: Pattern, values: dict):
     return p_terms
 
 
+def make_sub(struct: DavidObject, subbed: DavidObject, posn_offset: tuple, term_info: dict | tuple | None):
+    """Makes a substitution of a pattern populated with values into a certain position of another structure."""
+
+    # Commutative
+    if isinstance(term_info, dict):
+        ref_sub = descend_struct(struct, posn_offset)
+        ref_sub.terms = from_freq(term_info) + [subbed]
+
+        # TODO: Is this redundant when operator is top level?
+        struct._regenerate_freq(recurse=True)
+
+    # Non-commutative
+    elif isinstance(term_info, tuple):
+        ref_sub = descend_struct(struct, posn_offset)
+        ref_sub.terms = [*ref_sub[:term_info[0]], subbed, *ref_sub[term_info[1] + 1:]]
+
+        # OLD BUG: When ref_sub was updated, it did not update the frequency table of the parent struct.
+        # That is very, very bad!
+        struct._regenerate_freq(recurse=True)
+
+    # If the non-operator is itself top-level
+    elif term_info is None and posn_offset == tuple():
+        # TODO I mean, I think this is right?
+        struct \
+            = subbed
+
+    # Non-operator
+    elif term_info is None:
+        ref_sub = descend_struct(struct, posn_offset[:-1])
+
+        el_idx = posn_offset[-1]
+        ref_sub[el_idx] = subbed
+
+        struct._regenerate_freq(recurse=True)
+
+    return struct
+
+
 # TODO A little inefficient that we only pick the match object of each match call but ok
 
-def make_sub(test: Operator, identity: Identity, *, depth=1):
-    """Depth can be set to ``True`` to get all possible substitutions."""
+def find_subs_identity(test: Operator, identity: Identity, *, depth=1, top_level=False):
+    """
+    Finds all substitutions for an identity.
+
+    Depth can be set to ``True`` to get all possible substitutions.
+    """
+
+    # TODO idea
+    # for each identity in an identityset, when applying, keep a list of position offsets for
+    # where the identity found a match. then, it can skip matching terms it has tried to match before
+    # and that haven't changed.
+    # when a sub happens, the branch of the tree (it is basically a tree) is popped and has to be re-matched by all terms
+    # the only reason im considering a dict is because once it scans one term somewhere, if the same term comes up elsewhere
+    # then it won't have to be matched again.
 
     # TODO Reverse, how do we deal with functions?
 
@@ -77,34 +129,22 @@ def make_sub(test: Operator, identity: Identity, *, depth=1):
 
         try:
             var_subs, posn_offset, term_info = next(it)
+            # print(var_subs, posn_offset, term_info)
             cpy = test.copy()
 
-            # Make substitution
+            # Skip matches that aren't top level
+            if top_level and posn_offset != tuple():
+                continue
 
+            # Make substitution
             if isinstance(sub_pattern, Callable):
                 subbed = sub_pattern(var_subs)
             else:
-                subbed = substitute(sub_pattern, var_subs)
+                subbed = sub_into_pattern(sub_pattern, var_subs)
 
-            # Construct new structure
+            # print(subbed)
 
-            ref_sub = descend_struct(cpy, posn_offset)
-
-            # Non-commutative
-            if isinstance(term_info, tuple):
-                ref_sub.terms = [*ref_sub[:term_info[0]], subbed, *ref_sub[term_info[1] + 1:]]
-
-            # Non-operator
-            elif term_info is None:
-                ref_sub = descend_struct(cpy, posn_offset[:-1])
-                el_idx = posn_offset[-1]
-
-                ref_sub[el_idx] = subbed
-
-            # Commutative
-            else:
-                ref_sub.terms = from_freq(term_info) + [subbed]
-
+            cpy = make_sub(cpy, subbed, posn_offset, term_info)
             subs.append(cpy)
 
             depth -= 1
@@ -114,44 +154,109 @@ def make_sub(test: Operator, identity: Identity, *, depth=1):
     return subs
 
 
-def apply_until_constant(op: Operator, i_set: IdentitySet, *, do_eval=True):
+def apply_until_constant(op: Operator, i_set: IdentitySet, *, do_eval=True, top_level=False, return_changed=False):
     """Applies identity rules of an identity set until no more can be applied."""
 
     op_copy = op.copy()
-    print(op)
+
+    any_changes = False
 
     # TODO Make this for Identity() objects too instead of only IdentitySet()s
 
     while True:
         changed = False
-        prev_hash = hash(op_copy)
+        # prev = op_copy.copy()
+
+        # print('=========== TESTING IDENTITIES ON ', op_copy)
 
         for i in i_set:
-            options = make_sub(op_copy, i)
+            options = find_subs_identity(op_copy, i, top_level=top_level)
+
+            # print('testing', i.a.pattern, 'on', op)
+            # print('matches', options)
 
             if not options:
                 continue
 
-            # print('---------', i.a.pattern, i.a.wild_conditions)
+            # print('---------', i.a.pattern)
             # print('    op now:', op_copy)
-            # print('    op after:', options[0])
+            # print('    op after:', absorb(options[0]))
 
             # TODO Not a fan of absorb()ing; the substitution should just replace the original term instead of its insides
             # TODO But i guess not that big a deal since we have a function for it already and it would be better than copying code (sleep on it)
             # TODO Plus we can just eval without an if statement here lol
+            # print('applied', i.a.pattern, 'to get', options[0])
+            # print('Applied', i.a.pattern, ' for ', op_copy, ' ---> ', absorb(options[0]))
             op_copy = absorb(options[0])
 
-        # TODO Can i eval here
-        if do_eval:
-            op_copy = op_copy.eval(force=False)
-
-        if hash(op_copy) != prev_hash:
+            # todo new
             changed = True
+            any_changes = True
+
+        if do_eval:
+            # print('EVAL ---------')
+            # print('    op now:', op_copy)
+            # print('    op after:', evaluate(op_copy))
+            op_copy = absorb(evaluate(op_copy))
+
+        # todo why is this here? why not below op_copy = absorb(...)
+        # if not eq_struct(op_copy, prev):
+        #     any_changes = True
+        #     changed = True
 
         if not changed:
+            # print('UNCHANGED', op_copy, prev)
             break
 
-    return op_copy
+    # TODO This is disgusting
+    if not return_changed:
+        return op_copy
+    else:
+        return any_changes, op_copy
+
+
+def apply_one(op: Operator, i_set: IdentitySet, *, do_eval=True, top_level=False, return_changed=False):
+    """Applies at most 1 identity from the given identity set."""
+
+    op_copy = op.copy()
+    changed = False
+
+    for i in i_set:
+        options = find_subs_identity(op_copy, i, top_level=top_level)
+
+        # print('testing', i.a.pattern, 'on', op)
+        # print('matches', options)
+
+        if not options:
+            continue
+
+        # print('---------', i.a.pattern)
+        # print('    op now:', op_copy)
+        # print('    op after:', absorb(options[0]))
+
+        # TODO Not a fan of absorb()ing; the substitution should just replace the original term instead of its insides
+        # TODO But i guess not that big a deal since we have a function for it already and it would be better than copying code (sleep on it)
+        # TODO Plus we can just eval without an if statement here lol
+        # print('applied', i.a.pattern, 'to get', options[0])
+        print('Applied', i.a.pattern, ' for ', op_copy, ' ---> ', absorb(options[0]))
+        op_copy = absorb(options[0])
+
+        # todo new
+        changed = True
+        break
+
+    if do_eval:
+        # print('EVAL ---------')
+        # print('    op now:', op_copy)
+        # print('    op after:', evaluate(op_copy))
+        op_copy = absorb(evaluate(op_copy))
+
+    if not return_changed:
+        return op_copy
+    else:
+        return changed, op_copy
+
+
 
 
 def apply_greedily(op: Operator, i_set: IdentitySet, metric: Callable, *, depth=10):
@@ -166,7 +271,7 @@ def apply_greedily(op: Operator, i_set: IdentitySet, metric: Callable, *, depth=
     best_score = 0
 
     for i in i_set:
-        options = make_sub(op_copy, i)
+        options = find_subs_identity(op_copy, i)
 
         if not options:
             if best_branch is None or op_score > best_score:

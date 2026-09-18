@@ -1,4 +1,5 @@
 from src.core.base import DavidBase
+from src.core.error import DavidIsAngry
 
 from src.manipulate.basic import absorb
 from src.manipulate.eq import eq_struct
@@ -6,10 +7,10 @@ from src.manipulate.helpers import is_negative_coefficient
 from src.manipulate.pattern import Pattern
 from src.manipulate.simplify import simplify
 
-from src.struct.op import Log, Operator, Add, Multiply, Power
+from src.struct.op import Cos, Log, Operator, Add, Multiply, Power, Sin, Trig, internalize
 from src.struct.relation import Relation
 from src.struct.unknown import Unknown, Wild
-from src.struct.number import Constant, ImaginaryUnit, Number, Real, Rational, Integer, e, pi
+from src.struct.number import Constant, ImaginaryUnit, Number, Real, Natural, e, pi
 
 
 def tex(obj: DavidBase, *, frac=True):
@@ -28,9 +29,9 @@ def tex(obj: DavidBase, *, frac=True):
 
     # → Unknowns
     if isinstance(obj, Unknown):
-        # TODO Support for subscripts.
-
-        return str(obj.symbol)
+        if obj.subscript:
+            return fr'{ obj.symbol }_{{\text{{{ obj.subscript }}}}}'
+        return obj.symbol
 
     # → Relations
     if isinstance(obj, Relation):
@@ -63,14 +64,14 @@ def tex(obj: DavidBase, *, frac=True):
         if isinstance(obj, Multiply):
 
             if frac:
-                numerator = ''
-                denominator = ''
+                numerator = []
+                denominator = []
 
                 for i, term in enumerate(obj):
                     # Addition must be surrounded by brackets in multiplication [e.g. ab(c + d)]
                     # TODO When there are multiple numbers, how is this handled? Or a minus sign? Automatically collect? But that's not very nice.
                     if isinstance(term, Add):
-                        numerator += '(' + tex(term) + ')'
+                        numerator.append(r'\left(' + tex(term) + r'\right)')
 
                     # TODO Add a non-fraction mode too!
                     # Negative exponents are flipped and placed on the denominator
@@ -78,17 +79,23 @@ def tex(obj: DavidBase, *, frac=True):
                         base, exp = term
 
                         if is_negative_coefficient(exp):
-                            denominator += tex(simplify(term.duplicate(base, -exp)))
+                            denom_term = simplify(term.duplicate(base, -exp))
+
+                            if isinstance(denom_term, Add):
+                                denominator.append(r'\left(' + tex(denom_term) + r'\right)')
+                            else:
+                                denominator.append(tex(denom_term))
                         else:
-                            numerator += tex(term)
+                            numerator.append(tex(term))
 
                     else:
                         if i != 0:
-                            numerator += r' \cdot ' + tex(term)
+                            numerator.append(tex(term))
                         else:
-                            numerator += tex(term)
+                            numerator.append(tex(term))
 
-                numerator = '1' if not numerator else numerator
+                numerator = '1' if not numerator else r' \cdot '.join(numerator)
+                denominator = r' \cdot '.join(denominator)
 
                 if denominator:
                     return fr'\frac{{{ numerator }}}{{{ denominator }}}'
@@ -102,7 +109,7 @@ def tex(obj: DavidBase, *, frac=True):
                     t = tex(term, frac=frac)
 
                     if isinstance(term, Add):
-                        t = '(' + t + ')'
+                        t = r'\left(' + t + r'\right)'
 
                     o.append(t)
                 return r' \cdot '.join(o)
@@ -111,12 +118,12 @@ def tex(obj: DavidBase, *, frac=True):
         if isinstance(obj, Power):
             base, exp = obj
 
+            # TODO Fractions for like, x^-2
+
             p, q, r = Wild('p'), Wild('q'), Wild('r')
 
             root_test = [m for m in Pattern(p**(q/r)).match(obj)] + [m for m in Pattern(p**(Power(r, -1))).match(obj)]
-
-            print(obj, root_test)
-
+            # print(root_test)
             if root_test:
                 match = root_test[0]
 
@@ -127,7 +134,10 @@ def tex(obj: DavidBase, *, frac=True):
                     if q:
                         return fr'{ tex(p) }^{{\frac{{{ tex(q) }}}{{{ tex(r) }}}}}'
 
-                    return fr'\sqrt[{ tex(r) }]{{{ tex(p) }}}'
+                    if eq_struct(r, internalize(2)):
+                        return fr'\sqrt{{{tex(p)}}}'
+                    else:
+                        return fr'\sqrt[{ tex(r) }]{{{ tex(p) }}}'
 
             if isinstance(base, Add | Power):
                 return fr'\left({ tex(base, frac=frac) }\right)^{{{ tex(exp, frac=frac) }}}'
@@ -138,6 +148,16 @@ def tex(obj: DavidBase, *, frac=True):
         if isinstance(obj, Log):
             base, arg = obj.base, obj.arg
 
-            return fr'\log_{{{ tex(base, frac=frac) }}}({ tex(arg, frac=frac) })'
+            if base != e:
+                return fr'\log_{{{ tex(base, frac=frac) }}}\left({ tex(arg, frac=frac) }\right)'
+            else:
+                return fr'\ln\left({ tex(arg, frac=frac) }\right)'
 
-        return tex(obj)
+        # → Trigonometry
+        if isinstance(obj, Sin):
+            return fr'\sin\left({ tex(obj.inside, frac=frac) }\right)'
+
+        if isinstance(obj, Cos):
+            return fr'\cos\left({ tex(obj.inside, frac=frac) }\right)'
+
+        raise DavidIsAngry('Trying to TeX an object that is not part of Professor David')

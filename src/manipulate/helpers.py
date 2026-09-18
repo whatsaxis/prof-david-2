@@ -5,7 +5,7 @@ from src.core.base import DavidBase
 from src.manipulate.eq import eq_struct
 
 from src.struct.op import Multiply, Operator
-from src.struct.number import Constant, ImaginaryUnit, Number, Real, Rational
+from src.struct.number import Constant, ImaginaryUnit, Number, Real
 from src.struct.unknown import Unknown
 
 
@@ -33,6 +33,8 @@ def is_negative_coefficient(obj: DavidBase):
 
         for t in obj:
             if isinstance(t, Number) and not isinstance(t, ImaginaryUnit):
+                if t.value == 0:
+                    return False
                 if t.value < 0:
                     sign *= -1
 

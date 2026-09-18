@@ -8,15 +8,18 @@ from src.core.io import OperatorIO
 class Unknown(DavidBase, OperatorIO):
     """A symbolic unknown variable."""
 
-    def __init__(self, symbol: str, **facts):
+    def __init__(self, symbol: str, subscript: str = None, **facts):
         super().__init__(NumberAssumptions.create(**facts))
 
         self.symbol = symbol
+        self.subscript = subscript
 
     def __hash__(self):
-        return hash(self.symbol)
+        return hash(str(self))
 
     def __str__(self):
+        if self.subscript:
+            return f'{ self.symbol }_{ self.subscript }'
         return self.symbol
 
     def __repr__(self):
@@ -24,7 +27,13 @@ class Unknown(DavidBase, OperatorIO):
 
 
 class Wild(DavidBase, OperatorIO):
-    """Wildcard matching object for patterns."""
+    """
+    Wildcard matching object for patterns.
+
+    ``sequence=True`` creates a sequence wild.
+    This matches multiple terms in an operator.
+    It matches greedily, so that it has as many terms as possible.
+    """
 
     def __init__(self, symbol: str, *, sequence=False):
         # TODO Make an assumption set for Wild()
@@ -33,7 +42,6 @@ class Wild(DavidBase, OperatorIO):
 
         self.symbol = symbol
 
-        # TODO This here or in the Pattern object?
         self.sequence = sequence
 
     def __hash__(self):

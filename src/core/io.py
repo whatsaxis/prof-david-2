@@ -97,7 +97,7 @@ class OperatorIO(RelationIO):
     def __rsub__(self, other):
         from src.struct.op import Add
 
-        return Add(-other, self)
+        return Add(other, -self)
 
     def __neg__(self):
         from src.struct.op import Multiply

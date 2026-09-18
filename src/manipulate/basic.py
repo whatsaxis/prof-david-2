@@ -8,6 +8,7 @@ from src.struct.unknown import Unknown, Wild
 from src.struct.number import Number
 
 
+# TODO Replace all DavidBase with DavidObject
 DavidObject = Operator | Unknown | Wild | Number
 
 

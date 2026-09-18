@@ -2,11 +2,9 @@ import math
 
 from src.core.base import DavidBase
 from src.core.assume import NumberAssumptions
+from src.core.error import DavidIsAngry
 from src.core.io import OperatorIO
 
-
-# TODO Negative numbers don't match -p patterns. This is because they are not represented as a Multiply[-1, ...]
-# TODO Or we can just match with values? Somehow
 
 class Number(DavidBase, OperatorIO):
     """Number base class."""
@@ -76,46 +74,8 @@ def Complex(re: float, im: float):
     return re + im * ImaginaryUnit()
 
 
-class Rational(Number):
-    """A rational number of the form a/b."""
-
-    def __init__(self, a: int, b: int, **facts):
-        if b == 0:
-            raise ZeroDivisionError('Cannot define a rational number with b = 0')
-
-        gcd = math.gcd(a, b)
-
-        super().__init__(
-            # (a // gcd, b // gcd),
-            # TODO Oh lord
-            a / b,
-
-            rational=True,
-            non_negative=a == 0 or (math.copysign(1, a) // math.copysign(1, b)) == 1,  # TODO replace with helper
-
-            **facts
-        )
-
-    def __str__(self):
-        return str(self.value) + 'Ⓠ'
-
-    # def __hash__(self):
-    #     return hash((str(self.a), str(self.b)))
-
-    # @property
-    # def a(self):
-    #     return self.value[0]
-    #
-    # @property
-    # def b(self):
-    #     return self.value[1]
-
-    # def __str__(self):
-    #     return f'({ self.a }/{ self.b })'
-
-
-class Integer(Number):
-    """An integer."""
+class Natural(Number):
+    """A natural number."""
 
     def __init__(self, n: int, **facts):
         super().__init__(
@@ -128,9 +88,14 @@ class Integer(Number):
             **facts
         )
 
+        if n < 0:
+            raise DavidIsAngry('Cannot instantiate a negative natural number!')
+
     def __str__(self):
         return str(self.value) + 'Ⓩ'
 
+
+minus_one = Constant('-1', -1)
 
 pi = Constant('π', math.pi)
 e = Constant('𝑒', math.e)
