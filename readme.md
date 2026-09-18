@@ -6,8 +6,6 @@ The project represents mathematical expressions as structured objects and uses s
 
 ## Features
 
----
-
 * Custom symbolic expression representation
 * Expression parsing and manipulation
 * Algebraic simplification
@@ -74,9 +72,9 @@ d/dx (x^√x)
 → x^√x (ln(x)/(2√x) + 1/(2x))
 ```
 
-## Implementation
+All these examples are implemented in `demo.py`.
 
----
+## Implementation
 
 Expressions are represented using custom symbolic structures rather than being evaluated directly as numerical Python expressions.
 
@@ -115,8 +113,6 @@ Can the expression be transformed by substitution?
    │
    └── No → Equation is currently unsupported
 ```
-
-All these examples are implemented in `demo.py`.
 
 ### 1. Isolating variables
 
@@ -238,7 +234,7 @@ Expression:
 → no match
 ```
 
-The matcher uses `interrogate()` to combine facts discovered during recursive matching and reject contradictory assignments.
+The matcher uses an internal function called `interrogate()` to cross check facts discovered during recursive matching. It is used to reject contradictory assignments.
 
 ### Commutative matching
 
@@ -286,7 +282,7 @@ This allows patterns containing multiple interacting wildcards to be matched wit
 
 Sequence wildcards can match multiple terms within a commutative expression.
 
-For example, a pattern can conceptually match:
+For example, a pattern can match:
 
 ```text
 a + b + c
@@ -301,9 +297,7 @@ The matcher tracks the frequency of each term and determines which subset belong
 The matcher contains several optimisations to reduce unnecessary search:
 
 * Pattern terms are reordered before commutative matching
-* Already-resolved wildcards are matched directly against the remaining frequency table
+* Already resolved wildcards are matched directly against the remaining frequency table
 * Frequency tables avoid repeatedly scanning identical terms
 * Contradictory wildcard assignments are rejected as soon as they are detected
 * Sequence matching can directly absorb all remaining compatible terms when there is only one sequence wildcard
-
-Overall, the matcher combines recursive tree matching, structural equality, backtracking, wildcard unification and multiset matching for commutative operations.
