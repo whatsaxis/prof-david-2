@@ -27,37 +27,47 @@ The solver currently supports selected classes of:
 
 Examples:
 
-```text
-3x + 7 = 19
-→ x = 4
-
-x² - 5x + 6 = 0
-→ x = 3, 2
-
-x¹⁰(x + 1) = 0
-→ x = 0, -1
-
-e²ˣ - 4eˣ = -4
-→ x = ln(2)
-
-e³ˣ = 7
-→ x = ln(7)/3
-
-ln(x) = 3
-→ x = e³
-```
-
-In code: see all above examples in `demo.py`.
-
-An example in code (to demonstrate the syntax):
-
 ```python
 >>> solve(Equals(
     3*x + 7,
     19
 ), x)
 (4Ⓩ,)
+
+>>> solve(Equals(
+    x**2 - 5*x + 6,
+    0
+), x)
+(3Ⓩ, 2Ⓩ)
+
+
+>>> solve(Equals(
+    x**10 * (x + 1),
+    0
+), x)
+(0Ⓩ, -1)  # Note that -1 has a different representation to normal numbers
+
+>>> solve(Equals(
+    e**(2*x) - 4 * e**x,
+    -4
+), x)
+(Log❲𝑒❳[2Ⓩ],)
+
+
+>>> solve(Equals(
+    e**(3*x),
+    7
+), x)
+(Multiply[Power[3Ⓩ, -1], Log❲𝑒❳[7Ⓩ]],)  # 1/3 ln(7)
+
+>>> solve(Equals(
+    Log(e, x),
+    3
+), x)
+(Power[𝑒, 3Ⓩ],)
 ```
+
+See all above examples in `demo.py`.
 
 ### Symbolic Differentiation
 
@@ -68,34 +78,48 @@ This does lead to very large expressions, so they have to be simplified using th
 
 Examples:
 
-```text
-d/dx (x³ + 2x² - 5x + 1)
-→ 3x² + 4x - 5
-
-d/dx (x² sin(x))
-→ 2x sin(x) + x² cos(x)
-
-d/dx (eˣ)
-→ eˣ
-
-d/dx (ln(x))
-→ 1/x
-
-d/dx (sin(x²))
-→ 2x cos(x²)
-
-d/dx (x^√x)
-→ x^√x (ln(x)/(2√x) + 1/(2x))
-```
-
-In code: see all above examples in `demo.py`.
-
-An example:
 
 ```python
->>> differentiate(x**2, x)
-Multiply[2Ⓩ, x]
+>>> differentiate(
+    x**3 + 2 * x**2 - 5*x + 1,
+    x
+)
+Add[Multiply[5Ⓩ, -1], Multiply[4Ⓩ, x], Multiply[3Ⓩ, Power[x, 2Ⓩ]]]
+
+>>> differentiate(
+    x**2 * Sin(x),
+    x
+)
+Add[Multiply[2Ⓩ, x, sin[x]], Multiply[Power[x, 2Ⓩ], cos[x]]]
+
+>>> differentiate(
+    e**x,
+    x
+)
+Power[𝑒, x]
+
+>>> differentiate(
+    Log(e, x),
+    x
+)
+Power[x, -1]
+
+>>> differentiate(
+    Sin(x**2),
+    x
+)
+Multiply[2Ⓩ, x, cos[Power[x, 2Ⓩ]]]
+
+>>> differentiate(
+    x**x,
+    x
+)
+Multiply[Power[x, x], Add[1Ⓩ, Log❲𝑒❳[x]]]
+
+
 ```
+
+See all above examples in `demo.py`.
 
 ## Implementation
 
@@ -155,13 +179,19 @@ For example:
 x = 4
 ```
 
-The solver identifies the outer operation and applies its inverse, recursively reducing the expression until the variable is isolated (the onion!)
+Internally, this is
+
+```text
+Add[Multiply[3, x], 7] = 19
+```
+
+We "peel the onion" by applying the reverse of whatever is on the outside to get to the isolated variable.
 
 ### 2. Polynomial solving
 
 When an equation can be reduced to a polynomial, the solver extracts its coefficients and passes them to a polynomial-solving routine.
 
-For example:
+With the examples above, essentially:
 
 ```text
 x² - 5x + 6 = 0
@@ -176,7 +206,12 @@ This also allows factored expressions to be handled naturally:
 ```text
 x¹⁰(x + 1) = 0
 
-→ x¹⁰ = 0  or  x + 1 = 0
+Noties a factor of x¹⁰. Divides by x¹⁰ and adds 0 to the solution set.
+This is now linear:
+
+x + 1 = 0
+
+The above contributes -1 to the solution set, yielding:
 
 → x = 0, -1
 ```
@@ -206,11 +241,11 @@ allowing the resulting equation to be solved as a polynomial before substituting
 
 ## Pattern Matching
 
-Symbolic manipulation relies heavily on a custom pattern-matching system.
+Symbolic manipulation relies heavily on a custom pattern-matching system for rewrite rules.
 
 Patterns can contain:
 
-* Numbers and known symbols
+* Numbers and constants (like π and e)
 * Ordinary wildcards
 * Sequence wildcards matching multiple terms
 * Nested patterns
