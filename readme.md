@@ -2,7 +2,8 @@
 
 A symbolic mathematics engine built from scratch in Python.
 
-The project represents mathematical expressions as structured objects and uses symbolic manipulation and pattern-matching rules to simplify, differentiate, and solve mathematical expressions.
+The project represents mathematical expressions using custom classes (with many features under the hood for caching frequency tables, which is very important for commutative matching).
+It uses symbolic manipulation rules to simplify, differentiate, and solve mathematical expressions.
 
 ## Features
 
@@ -46,9 +47,24 @@ ln(x) = 3
 → x = e³
 ```
 
+In code: see all above examples in `demo.py`.
+
+An example in code (to demonstrate the syntax):
+
+```python
+>>> solve(Equals(
+    3*x + 7,
+    19
+), x)
+(4Ⓩ,)
+```
+
 ### Symbolic Differentiation
 
-The differentiation engine applies symbolic differentiation rules including the power, product, chain, exponential and logarithmic rules.
+The differentiation engine applies symbolic differentiation rules to differentiate arbitrary expressions.
+
+In particular, it combines the product rule and chain rule to differentiate ANY expression. These are sufficient as any other differentiation rules, like the quotient rule, are just the chain rule and product rule under the hood.
+This does lead to very large expressions, so they have to be simplified using the simplification rules of `simplify()`.
 
 Examples:
 
@@ -72,20 +88,32 @@ d/dx (x^√x)
 → x^√x (ln(x)/(2√x) + 1/(2x))
 ```
 
-All these examples are implemented in `demo.py`.
+In code: see all above examples in `demo.py`.
+
+An example:
+
+```python
+>>> differentiate(x**2, x)
+Multiply[2Ⓩ, x]
+```
 
 ## Implementation
 
 Expressions are represented using custom symbolic structures rather than being evaluated directly as numerical Python expressions.
 
-Symbolic manipulation is performed using pattern-matching and rewrite rules operated by a custom pattern matcher. The equation solver analyses the structure of an expression and attempts different solving strategies, including isolation, polynomial solving and substitution.
+Symbolic manipulation is performed using pattern-matching operated by a custom pattern matcher. This allows me to implement arbitrary rewrite rules for simplifying expressions in a way similar to how a human would.
 
-The project is still experimental, and support for more general equations, domain restrictions and complex solutions is ongoing.
+The equation solver analyses the structure of an expression and attempts different solving strategies. These include include:
+
+* Collection (reducing the number of instances of a variable)
+* Isolation (bringing terms closer together, and if there is just 1 instance, solve directly by reversing operations around the single instance - like an onion!)
+* Homogenization (attempting to find a common substitution between terms to transform an equation into a polynomial)
+* PolySolve (used to solve polynomials given a mapping of exponents to coefficients)
+
+The project is still experimental and there are some serious bugs. These include a limited support for complex roots and trigonometry (which I am working on!)
 
 
 ## Equation Solving
-
-The equation solver uses a recursive, structure-based approach rather than converting expressions directly into numerical functions.
 
 At a high level, an equation is processed as follows:
 
@@ -101,7 +129,7 @@ Is the variable isolated?
         ↓
 Move everything to one side
         ↓
-Simplify / collect terms
+Simplify / collect terms (to reduce number of instances of variable)
         ↓
 Is it a polynomial?
    ├── Yes → Extract coefficients → Polynomial solver
@@ -114,7 +142,7 @@ Can the expression be transformed by substitution?
    └── No → Equation is currently unsupported
 ```
 
-### 1. Isolating variables
+### 1. Isolated variables
 
 For equations where the variable is contained inside a sequence of reversible operations, the solver works backwards through the expression tree.
 
@@ -127,7 +155,7 @@ For example:
 x = 4
 ```
 
-The solver identifies the outer operation and applies its inverse, recursively reducing the expression until the variable is isolated.
+The solver identifies the outer operation and applies its inverse, recursively reducing the expression until the variable is isolated (the onion!)
 
 ### 2. Polynomial solving
 
@@ -153,6 +181,14 @@ x¹⁰(x + 1) = 0
 → x = 0, -1
 ```
 
+This also handles cases where each term's exponent has a common GCD that is greater than 1:
+
+```
+x⁴ - 10 x² + 25 = 0
+Would find u = x², solve u² + 10u + 25 = 0
+Then, back substitute u = 5 as x² = 5 to give solutions in x
+```
+
 ### 3. Substitution
 
 For some nonlinear equations, the solver attempts to identify repeated structures and transform the equation into a simpler form.
@@ -160,6 +196,7 @@ For some nonlinear equations, the solver attempts to identify repeated structure
 For example, an equation involving repeated powers of `eˣ` can be transformed using a substitution such as:
 
 ```text
+e²ˣ - 8eˣ + 20 = 0
 u = eˣ
 ```
 
@@ -185,7 +222,30 @@ For example, a rewrite rule can describe a general identity without knowing the 
 a² - b² → (a - b)(a + b)
 ```
 
-The matcher determines which subexpressions correspond to `a` and `b`, while ensuring that repeated wildcards receive consistent values.
+Here's a small subset of the simplification rewrite rules in `simplify()`:
+
+```python
+p, q, r = Wild('p'), Wild('q'), Wild('r')
+u, v = Wild('u', sequence=True), Wild('v', sequence=True)
+
+SimplifyIdentities = IdentitySet(
+   # Addition
+   Identity(p + 0, p),
+   Identity(u - u, internalize(0)),
+   Identity(p + p, 2*p),
+   Identity(p + u*p, p*(u + 1), {u: is_numeric}),
+   Identity(u*p + v*p, (u + v)*p),
+   
+   # Multiplication
+   Identity(1 * p, p),
+   Identity(0 * p, internalize(0)),
+   Identity(p / p, internalize(1), {p: lambda t: not eq_struct(t, internalize(0))}),
+
+   ...
+)
+```
+
+The matcher determines which subexpressions correspond to `a` and `b`, while ensuring that repeated wildcards receive consistent values. This is a big component of the matcher, explained below.
 
 ### Recursive structural matching
 
@@ -204,7 +264,7 @@ Expression:
   y = sin(b)
 ```
 
-Nested patterns are matched recursively, allowing rules to operate on arbitrarily deep expressions.
+Nested patterns are matched recursively, meaning rules can operate on arbitrarily deep expressions.
 
 ### Wildcard consistency
 
@@ -282,13 +342,28 @@ This allows patterns containing multiple interacting wildcards to be matched wit
 
 Sequence wildcards can match multiple terms within a commutative expression.
 
-For example, a pattern can match:
+For example, a pattern
 
-```text
-a + b + c
+```python
+p = Wild('p')
+u = Wild('u', sequence=True)
+
+an_amazing_pattern = Pattern(p + u)
 ```
 
-against an expression containing an arbitrary number of additive terms.
+Can match:
+
+```python
+>>> an_amazing_pattern.match(a + b + c)
+
+→ {p=a, u = b+c}
+→ {p=b, u = a+c}
+→ {p=c, u = a+b}
+
+# (The internal form is a bit messier than this though...)
+```
+
+That is, against an expression containing an arbitrary number of additive terms.
 
 The matcher tracks the frequency of each term and determines which subset belongs to the sequence wildcard.
 
@@ -300,4 +375,6 @@ The matcher contains several optimisations to reduce unnecessary search:
 * Already resolved wildcards are matched directly against the remaining frequency table
 * Frequency tables avoid repeatedly scanning identical terms
 * Contradictory wildcard assignments are rejected as soon as they are detected
-* Sequence matching can directly absorb all remaining compatible terms when there is only one sequence wildcard
+* Sequence matching can match all remaining compatible terms when there is only one sequence wildcard
+
+Which reduces a problem of many, MANY (looking at you Γ function) possibilities, to something more manageable!
